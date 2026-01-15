@@ -2,6 +2,7 @@ using GitHubDevOpsLink.Services.Data;
 using LibGit2Sharp;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace GitHubDevOpsLink.Services;
 
@@ -140,30 +141,47 @@ public sealed class LocalRepositoryService : ILocalRepositoryService
     private static bool IsRemoteUrlMatch(string githubUrl, string remoteUrl)
     {
         // Normalize URLs for comparison
-        var normalizedGithubUrl = NormalizeGitHubUrl(githubUrl);
-        var normalizedRemoteUrl = NormalizeGitHubUrl(remoteUrl);
+        string? normalizedGithubUrl = NormalizeGitHubUrl(githubUrl);
+        string? normalizedRemoteUrl = NormalizeGitHubUrl(remoteUrl);
+
+        // If either URL couldn't be normalized, they don't match
+        if (normalizedGithubUrl is null || normalizedRemoteUrl is null)
+            return false;
 
         return normalizedGithubUrl.Equals(normalizedRemoteUrl, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string NormalizeGitHubUrl(string url)
+    private static string? NormalizeGitHubUrl(string url, bool stripGitSuffix = true)
     {
-        // Remove protocol
-        url = url.Replace("https://", "").Replace("http://", "").Replace("git@", "");
+        if (string.IsNullOrWhiteSpace(url))
+            return null;
 
-        // Replace colon with slash for SSH URLs (git@github.com:user/repo.git -> github.com/user/repo.git)
-        url = url.Replace("github.com:", "github.com/");
-
-        // Remove .git suffix
-        if (url.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {
-            url = url.Substring(0, url.Length - 4);
+            var path = uri.AbsolutePath.TrimStart('/');
+
+            if (stripGitSuffix && path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+                path = path.Substring(0, path.Length - 4);
+
+            return string.IsNullOrEmpty(path) ? null : path;
         }
 
-        // Remove trailing slash
-        url = url.TrimEnd('/');
+        var scpMatch = Regex.Match(url,
+            @"^(?<user>[A-Za-z0-9._-]+)@(?<host>[A-Za-z0-9._-]+):(?<path>.+)$");
 
-        return url.ToLowerInvariant();
+        if (scpMatch.Success)
+        {
+            var path = scpMatch.Groups["path"].Value;
+
+            path = path.TrimStart('/');
+
+            if (stripGitSuffix && path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+                path = path.Substring(0, path.Length - 4);
+
+            return string.IsNullOrEmpty(path) ? null : path;
+        }
+
+        return null;
     }
 
     public async Task<string?> GetLocalPathForRepositoryAsync(long repositoryId)
